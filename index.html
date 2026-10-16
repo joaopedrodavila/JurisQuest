@@ -1709,7 +1709,7 @@
             <div style="font-size: 28px;">💼</div>
             <h4 style="color: var(--emerald);">Plantão Rápido</h4>
             <p>Precisando de Honorários extras para comprar Vade Mecum e Café?</p>
-            <button class="btn-rpg-emerald" style="width: 100%; font-size: 10.5px;" onclick="window.workShiftCoins()">
+            <button class="btn-rpg-emerald" style="width: 100%; font-size: 10.5px;" id="btn-plantao-side" onclick="window.workShiftCoins()">
                 +50 Moedas 💰
             </button>
         </div>
@@ -1983,8 +1983,8 @@
                     <h2>SUPRIMENTOS JURÍDICOS</h2>
                     <p>Troque seus Honorários por vantagens estratégicas para usar nas batalhas.</p>
                 </div>
-                <button class="btn-rpg-emerald" onclick="window.workShiftCoins()">
-                    💼 Plantão (+50 💰)
+                <button class="btn-rpg-emerald" id="btn-plantao-main" onclick="window.workShiftCoins()">
+                    💼 Plantão (0/3)
                 </button>
             </div>
 
@@ -2029,7 +2029,7 @@
             <div class="panel-box">
                 <div class="panel-title">🎭 Seu Avatar & Sistema de Patentes (Levels)</div>
                 <p style="font-size: 11.5px; color: #cbd5e1; line-height: 1.4;">
-                    Seu avatar escolhido permanece com você durante toda a jornada e aparece no <strong>🏆 Ranking</strong>. Ao ganhar XP, você sobe de Nível. O Nível 1 exige 100 XP para avançar; a cada novo nível, a exigência aumenta em 2/3 (aprox. 100 → 167 → 278 → 464 XP...).
+                    Seu avatar escolhido permanece com você durante toda a jornada e aparece no <strong>🏆 Ranking</strong>. Ao ganhar XP, você sobe de Nível (a cada <strong>100 XP</strong>) e conquista novas Patentes Jurídicas:
                 </p>
                 <div id="office-avatar-grid" class="avatar-grid"></div>
                 <div class="rules-list" style="margin-top: 4px; font-size: 11px; gap: 5px;">
@@ -3929,6 +3929,8 @@ function createInitialState() {
         coins: 120,
         streak: 0,
         bestInfinite: 0,
+        plantaoCount: 0,
+        plantaoDate: '',
         sound: true,
         pcMode: window.innerWidth >= 960,
         avatar: "👨‍🎓",
@@ -3950,6 +3952,32 @@ function createInitialState() {
             9: { ans: 0, ok: 0 }
         }
     };
+}
+
+const DAILY_PLANTAO_LIMIT = 3;
+
+function getTodayKey() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + d;
+}
+
+function normalizePlantaoState(st) {
+    const today = getTodayKey();
+    if (!st.plantaoDate || st.plantaoDate !== today) {
+        st.plantaoDate = today;
+        st.plantaoCount = 0;
+    } else {
+        st.plantaoCount = Math.max(0, Math.min(DAILY_PLANTAO_LIMIT, parseInt(st.plantaoCount, 10) || 0));
+    }
+    return st;
+}
+
+function getPlantaoRemaining(st) {
+    normalizePlantaoState(st || state);
+    return Math.max(0, DAILY_PLANTAO_LIMIT - (st || state).plantaoCount);
 }
 
 function getPlayerAvatar(st) {
@@ -4186,6 +4214,7 @@ let state = loadState();
 function normalizeLoadedState(parsed) {
     const def = createInitialState();
     const merged = Object.assign({}, def, parsed);
+    normalizePlantaoState(merged);
     merged.items = Object.assign({}, def.items, (parsed && parsed.items) || {});
     merged.subjectStats = Object.assign({}, def.subjectStats, (parsed && parsed.subjectStats) || {});
     merged.masteredIds = Array.isArray(parsed && parsed.masteredIds) ? parsed.masteredIds : [];
@@ -4203,6 +4232,8 @@ function encodeSaveCode(st) {
             c: st.coins || 0,
             s: st.streak || 0,
             b: st.bestInfinite || 0,
+            pc: st.plantaoCount || 0,
+            pd: st.plantaoDate || getTodayKey(),
             av: getPlayerAvatar(st),
             i: [
                 (st.items && st.items.vade) || 0,
@@ -4241,6 +4272,9 @@ function decodeSaveCode(codeStr) {
         restored.coins = Math.max(0, parseInt(compact.c, 10) || 0);
         restored.streak = Math.max(0, parseInt(compact.s, 10) || 0);
         restored.bestInfinite = Math.max(0, parseInt(compact.b, 10) || 0);
+        restored.plantaoCount = Math.max(0, Math.min(DAILY_PLANTAO_LIMIT, parseInt(compact.pc, 10) || 0));
+        restored.plantaoDate = typeof compact.pd === 'string' ? compact.pd : getTodayKey();
+        normalizePlantaoState(restored);
         if (compact.av && AVATARS.indexOf(compact.av) !== -1) {
             restored.avatar = compact.av;
         }
@@ -4465,51 +4499,24 @@ function showToast(text) {
     }, 2400);
 }
 
-const XP_LEVEL_BASE = 100;
-const XP_LEVEL_GROWTH = 5 / 3; // cada novo nível exige 2/3 a mais de XP que o anterior
-
-function getLevelXpInfo(xp) {
-    let level = 1;
-    let totalXpAtLevelStart = 0;
-    let xpNeededForNext = XP_LEVEL_BASE;
-
-    while (xp >= totalXpAtLevelStart + xpNeededForNext) {
-        totalXpAtLevelStart += xpNeededForNext;
-        level++;
-        xpNeededForNext = Math.ceil(xpNeededForNext * XP_LEVEL_GROWTH);
-    }
-
-    return {
-        level: level,
-        currentXp: xp - totalXpAtLevelStart,
-        neededXp: xpNeededForNext,
-        totalXpAtLevelStart: totalXpAtLevelStart
-    };
-}
-
 function refreshHUD() {
-    const xpInfo = getLevelXpInfo(state.xp);
-    const calcLevel = xpInfo.level;
+    const calcLevel = Math.floor(state.xp / 100) + 1;
     if (calcLevel > state.level) {
         state.level = calcLevel;
         const r = getRankObj(state.level);
         showToast('🎉 Promovido para ' + r.title + ' (Nível ' + state.level + ')!');
         playSound('win');
-    } else if (calcLevel < state.level) {
-        state.level = calcLevel;
     }
 
     const rank = getRankObj(state.level);
     const chosenAvatar = getPlayerAvatar(state);
-    const xpMod = xpInfo.currentXp;
-    const xpNeeded = xpInfo.neededXp;
-    const xpPercent = Math.min(100, Math.round((xpMod / xpNeeded) * 100));
+    const xpMod = state.xp % 100;
 
     document.getElementById('hud-avatar').textContent = chosenAvatar;
     document.getElementById('hud-level').textContent = 'NVL ' + state.level;
     document.getElementById('hud-rank').textContent = rank.title;
-    document.getElementById('hud-xp-fill').style.width = xpPercent + '%';
-    document.getElementById('hud-xp-text').textContent = xpMod + '/' + xpNeeded + ' XP';
+    document.getElementById('hud-xp-fill').style.width = xpMod + '%';
+    document.getElementById('hud-xp-text').textContent = xpMod + '/100 XP';
     document.getElementById('hud-coins').textContent = state.coins;
     document.getElementById('hud-streak').textContent = state.streak;
     document.getElementById('btn-sound').textContent = state.sound ? '🔊' : '🔇';
@@ -4643,6 +4650,21 @@ function renderShopView() {
     const container = document.getElementById('shop-container');
     container.innerHTML = '';
 
+    const plantaoRemaining = getPlantaoRemaining(state);
+    const plantaoUsed = DAILY_PLANTAO_LIMIT - plantaoRemaining;
+    const plantaoDisabled = plantaoRemaining <= 0;
+    const plantaoLabel = plantaoDisabled
+        ? '💼 Plantões esgotados hoje (' + plantaoUsed + '/' + DAILY_PLANTAO_LIMIT + ')'
+        : '💼 Plantão (' + plantaoUsed + '/' + DAILY_PLANTAO_LIMIT + ')';
+    const sideShiftBtn = document.getElementById('btn-plantao-side');
+    const mainShiftBtn = document.getElementById('btn-plantao-main');
+    [sideShiftBtn, mainShiftBtn].forEach(function (btn) {
+        if (!btn) return;
+        btn.disabled = plantaoDisabled;
+        btn.textContent = plantaoLabel;
+        btn.title = plantaoDisabled ? 'Limite diário de 3 Plantões atingido. O contador reinicia na próxima data.' : 'Você pode fazer mais ' + plantaoRemaining + ' Plantão(ões) hoje.';
+    });
+
     SHOP_CATALOG.forEach(function (item) {
         const qty = state.items[item.id] || 0;
         const row = document.createElement('div');
@@ -4680,10 +4702,22 @@ window.buyItem = function (itemId, price) {
 };
 
 window.workShiftCoins = function () {
+    normalizePlantaoState(state);
+    if (state.plantaoCount >= DAILY_PLANTAO_LIMIT) {
+        playSound('hurt');
+        renderShopView();
+        showToast('⏳ Limite diário atingido: você já fez 3 Plantões hoje. Volte amanhã!');
+        return;
+    }
+
+    state.plantaoCount += 1;
+    state.plantaoDate = getTodayKey();
     state.coins += 50;
     playSound('item');
     refreshHUD();
-    showToast('💼 Plantão concluído: +50 Honorários (💰)!');
+    renderShopView();
+    showToast('💼 Plantão concluído: +50 Honorários (💰)! ' + state.plantaoCount + '/' + DAILY_PLANTAO_LIMIT + ' hoje.');
+    saveState();
 };
 
 function renderOfficeView() {
@@ -5190,8 +5224,7 @@ window.handleOptionPick = function (pickedIdx) {
 
         const dmg = isCrit ? 35 : 25;
         const coinsGain = (isCrit ? 25 : 15) + Math.min(20, state.streak * 2);
-        const worldAlreadyCleared = battle.mode === 'world' && state.clearedWorlds.indexOf(battle.worldId) !== -1;
-        const xpGain = worldAlreadyCleared ? 0 : (isCrit ? 30 : 20);
+        const xpGain = isCrit ? 30 : 20;
 
         battle.bossHP = Math.max(0, battle.bossHP - dmg);
         state.coins += coinsGain;
@@ -5347,10 +5380,7 @@ function openEndgameModal(won) {
             newlyCleared = true;
         }
         state.coins += 75;
-        // XP de conclusão só é concedido na primeira vez que o mundo é zerado.
-        // Rejogar um mundo já concluído continua valendo moedas, mas não XP.
-        const completionXpGain = (battle.mode === 'world' && !newlyCleared) ? 0 : 60;
-        state.xp += completionXpGain;
+        state.xp += 60;
         refreshHUD();
 
         const nextWorld = WORLDS.find(function (w) { return w.id === battle.worldId + 1; });
@@ -5361,8 +5391,7 @@ function openEndgameModal(won) {
         icon.textContent = '🏆';
         title.textContent = battle.mode === 'review' ? 'MASMORRA CONCLUÍDA!' : 'MUNDO CONQUISTADO!';
         title.style.color = 'var(--gold-bright)';
-        const xpRewardText = completionXpGain > 0 ? ' e <strong>+60 XP</strong>' : ' (sem XP: mundo já concluído)';
-        desc.innerHTML = 'Você derrotou a Banca Examinadora e recebeu um bônus de <strong>+75 Honorários (💰)</strong>' + xpRewardText + '!' + unlockNotice;
+        desc.innerHTML = 'Você derrotou a Banca Examinadora e recebeu um bônus de <strong>+75 Honorários (💰)</strong> e <strong>+60 XP</strong>!' + unlockNotice;
     } else {
         playSound('hurt');
         icon.textContent = '📚';
