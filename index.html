@@ -3927,6 +3927,33 @@ function playSound(type) {
 
 const SAVE_KEY = 'jq_save_v4';
 const LEGACY_SAVE_KEY = 'jurisquest_native_save_v1';
+const DAILY_PLANTAO_LIMIT = 3;
+
+function getTodayKey() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + d;
+}
+
+function normalizePlantaoState(st) {
+    if (!st) return st;
+    const today = getTodayKey();
+    if (!st.plantaoDate || st.plantaoDate !== today) {
+        st.plantaoDate = today;
+        st.plantaoCount = 0;
+    } else {
+        st.plantaoCount = Math.max(0, Math.min(DAILY_PLANTAO_LIMIT, parseInt(st.plantaoCount, 10) || 0));
+    }
+    return st;
+}
+
+function getPlantaoRemaining(st) {
+    const target = st || state;
+    normalizePlantaoState(target);
+    return Math.max(0, DAILY_PLANTAO_LIMIT - (target.plantaoCount || 0));
+}
 
 function createInitialState() {
     return {
@@ -3936,13 +3963,14 @@ function createInitialState() {
         streak: 0,
         bestInfinite: 0,
         plantaoCount: 0,
-        plantaoDate: '',
+        plantaoDate: getTodayKey(),
         sound: true,
         pcMode: window.innerWidth >= 960,
         avatar: "👨‍🎓",
         cloudUser: "",
         cloudPinHash: "",
         cloudAccountId: "",
+        cloudOwnerSig: "",
         items: { vade: 2, cafe: 2, sumula: 2, embargos: 1 },
         masteredIds: [],
         wrongIds: [],
@@ -3961,30 +3989,13 @@ function createInitialState() {
     };
 }
 
-const DAILY_PLANTAO_LIMIT = 3;
-
-function getTodayKey() {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
-    return y + '-' + m + '-' + d;
-}
-
-function normalizePlantaoState(st) {
-    const today = getTodayKey();
-    if (!st.plantaoDate || st.plantaoDate !== today) {
-        st.plantaoDate = today;
-        st.plantaoCount = 0;
-    } else {
-        st.plantaoCount = Math.max(0, Math.min(DAILY_PLANTAO_LIMIT, parseInt(st.plantaoCount, 10) || 0));
-    }
-    return st;
-}
-
-function getPlantaoRemaining(st) {
-    normalizePlantaoState(st || state);
-    return Math.max(0, DAILY_PLANTAO_LIMIT - (st || state).plantaoCount);
+function escapeHtml(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function getPlayerAvatar(st) {
@@ -4230,13 +4241,14 @@ function normalizeLoadedState(parsed) {
     merged.avatar = (parsed && parsed.avatar && AVATARS.indexOf(parsed.avatar) !== -1) ? parsed.avatar : def.avatar;
     merged.cloudPinHash = typeof merged.cloudPinHash === "string" ? merged.cloudPinHash : "";
     merged.cloudAccountId = typeof merged.cloudAccountId === "string" ? merged.cloudAccountId : "";
-    // Versões antigas guardavam cloudPin; ele é descartado e a conta antiga precisa ser reconectada.
+    merged.cloudOwnerSig = typeof merged.cloudOwnerSig === "string" ? merged.cloudOwnerSig : "";
     delete merged.cloudPin;
     return merged;
 }
 
 function encodeSaveCode(st) {
     try {
+        normalizePlantaoState(st);
         const compact = {
             x: st.xp || 0,
             l: st.level || 1,
@@ -4354,7 +4366,8 @@ function updateSaveCodeFields() {
 }
 
 function refreshCloudBadgesUI() {
-    const isLogged = !!(state && state.cloudUser);
+    const isLogged = !!(state && state.cloudUser && state.cloudAccountId);
+    const safeUser = escapeHtml(state.cloudUser);
     const startPill = document.getElementById('start-cloud-pill');
     const startCloudBtn = document.getElementById('lbl-start-cloud-btn');
     const rankMyStatus = document.getElementById('ranking-my-status');
@@ -4365,7 +4378,7 @@ function refreshCloudBadgesUI() {
     if (startPill) {
         if (isLogged) {
             startPill.className = 'cloud-pill';
-            startPill.textContent = '☁️ Nuvem Ativa: ' + state.cloudUser;
+            startPill.textContent = '🔒 Nuvem Ativa: ' + state.cloudUser;
         } else {
             startPill.className = 'cloud-pill offline';
             startPill.textContent = '☁️ Conectar Conta na Nuvem';
@@ -4383,15 +4396,15 @@ function refreshCloudBadgesUI() {
     }
     if (officeDesc) {
         officeDesc.innerHTML = isLogged
-            ? '✅ Sincronizando automaticamente na nuvem Firebase como <strong>' + state.cloudUser + '</strong>.'
-            : 'Escolha seu <strong>Nome/Apelido</strong> e um <strong>PIN</strong>. Seu progresso ficará salvo automaticamente no servidor Firebase (<strong>jurisquest-411f8</strong>) e você aparecerá na aba <strong>🏆 Ranking</strong>!';
+            ? '🔒 Sincronizando automaticamente na nuvem Firebase (SHA-256) como <strong>' + safeUser + '</strong>.'
+            : 'Escolha seu <strong>Nome/Apelido</strong> e um <strong>PIN simples (4 a 8 dígitos)</strong>. Seu PIN é protegido por SHA-256 e nunca é enviado ao Firebase!';
     }
     if (logoutBtn) {
         logoutBtn.style.display = isLogged ? 'inline-block' : 'none';
     }
     if (modalSub) {
         modalSub.textContent = isLogged
-            ? '✅ Conectado como: ' + state.cloudUser
+            ? '🔒 Conectado como: ' + state.cloudUser
             : 'Sincronização automática em qualquer aparelho';
     }
 
@@ -4402,6 +4415,7 @@ function refreshCloudBadgesUI() {
 }
 
 function saveState() {
+    normalizePlantaoState(state);
     const code = encodeSaveCode(state);
     let localOk = false;
     try {
@@ -4419,8 +4433,8 @@ function saveState() {
     const statusEl = document.getElementById('save-status-indicator');
     if (statusEl) {
         const timeNow = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-        if (state.cloudUser) {
-            statusEl.textContent = '☁️ Salvo na Nuvem Firebase (' + state.cloudUser + ') às ' + timeNow;
+        if (state.cloudUser && state.cloudAccountId) {
+            statusEl.textContent = '🔒 Salvo na Nuvem Firebase (' + state.cloudUser + ') às ' + timeNow;
             statusEl.style.color = 'var(--emerald)';
         } else if (localOk) {
             statusEl.textContent = '✅ Progresso salvo neste aparelho (' + timeNow + ')';
@@ -4510,24 +4524,51 @@ function showToast(text) {
     }, 2400);
 }
 
+const XP_LEVEL_BASE = 100;
+const XP_LEVEL_GROWTH = 5 / 3; // Cada novo nível exige +2/3 de XP em relação ao anterior
+
+function getLevelXpInfo(xp) {
+    let level = 1;
+    let totalXpAtLevelStart = 0;
+    let xpNeededForNext = XP_LEVEL_BASE;
+
+    while (xp >= totalXpAtLevelStart + xpNeededForNext) {
+        totalXpAtLevelStart += xpNeededForNext;
+        level++;
+        xpNeededForNext = Math.ceil(xpNeededForNext * XP_LEVEL_GROWTH);
+    }
+
+    return {
+        level: level,
+        currentXp: xp - totalXpAtLevelStart,
+        neededXp: xpNeededForNext,
+        totalXpAtLevelStart: totalXpAtLevelStart
+    };
+}
+
 function refreshHUD() {
-    const calcLevel = Math.floor(state.xp / 100) + 1;
+    const xpInfo = getLevelXpInfo(state.xp);
+    const calcLevel = xpInfo.level;
     if (calcLevel > state.level) {
         state.level = calcLevel;
         const r = getRankObj(state.level);
         showToast('🎉 Promovido para ' + r.title + ' (Nível ' + state.level + ')!');
         playSound('win');
+    } else if (calcLevel < state.level) {
+        state.level = calcLevel;
     }
 
     const rank = getRankObj(state.level);
     const chosenAvatar = getPlayerAvatar(state);
-    const xpMod = state.xp % 100;
+    const xpMod = xpInfo.currentXp;
+    const xpNeeded = xpInfo.neededXp;
+    const xpPercent = Math.min(100, Math.round((xpMod / xpNeeded) * 100));
 
     document.getElementById('hud-avatar').textContent = chosenAvatar;
     document.getElementById('hud-level').textContent = 'NVL ' + state.level;
     document.getElementById('hud-rank').textContent = rank.title;
-    document.getElementById('hud-xp-fill').style.width = xpMod + '%';
-    document.getElementById('hud-xp-text').textContent = xpMod + '/100 XP';
+    document.getElementById('hud-xp-fill').style.width = xpPercent + '%';
+    document.getElementById('hud-xp-text').textContent = xpMod + '/' + xpNeeded + ' XP';
     document.getElementById('hud-coins').textContent = state.coins;
     document.getElementById('hud-streak').textContent = state.streak;
     document.getElementById('btn-sound').textContent = state.sound ? '🔊' : '🔇';
@@ -4781,10 +4822,9 @@ function renderOfficeView() {
 
 let resetConfirmArmed = false;
 
-// Zera também o registro remoto do jogador. Isso evita que um reset local
-// seja revertido pelo Ranking ao reconectar a mesma conta.
-window._resetCloudRanking = async function (cloudUser, cloudPin, avatar) {
-    if (!cloudUser || !cloudPin || typeof FIRESTORE_BASE_URL === 'undefined' || typeof FIREBASE_API_KEY === 'undefined') {
+// Zera de forma sincronizada tanto o save privado quanto o documento no Ranking
+window._resetCloudRanking = async function (cloudUser, cloudPinHash, cloudAccountId, cloudOwnerSig, avatar) {
+    if (!cloudUser || !cloudAccountId || typeof FIRESTORE_BASE_URL === 'undefined' || typeof FIREBASE_API_KEY === 'undefined') {
         return false;
     }
     const userKey = normalizeUserKey(cloudUser);
@@ -4792,17 +4832,23 @@ window._resetCloudRanking = async function (cloudUser, cloudPin, avatar) {
 
     const resetState = createInitialState();
     resetState.cloudUser = cloudUser;
-    resetState.cloudPin = cloudPin;
+    resetState.cloudPinHash = cloudPinHash || "";
+    resetState.cloudAccountId = cloudAccountId;
+    resetState.cloudOwnerSig = cloudOwnerSig || "";
     resetState.avatar = avatar || resetState.avatar;
 
-    const docUrl = FIRESTORE_BASE_URL + '/players/' + encodeURIComponent(userKey) + '?key=' + FIREBASE_API_KEY;
     try {
-        const res = await fetch(docUrl, {
+        const saveRes = await fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, cloudAccountId), {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildFirestoreFieldsFromState(resetState, cloudPin))
+            body: JSON.stringify(buildPrivateSaveFields(resetState))
         });
-        return res.ok;
+        const rankRes = await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, userKey), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildPublicLeaderboardFields(resetState, cloudOwnerSig))
+        });
+        return saveRes.ok && rankRes.ok;
     } catch (e) {
         return false;
     }
@@ -4828,15 +4874,15 @@ window.handleResetProgress = async function () {
     const keepAvatar = getPlayerAvatar(state);
     const keepPc = state.pcMode;
     const cloudUser = state.cloudUser || '';
-    const cloudPin = state.cloudPin || '';
+    const cloudPinHash = state.cloudPinHash || '';
+    const cloudAccountId = state.cloudAccountId || '';
+    const cloudOwnerSig = state.cloudOwnerSig || '';
 
-    // Primeiro zera a pontuação da nuvem; depois recria o estado local.
-    // Assim, ao entrar novamente com o mesmo apelido/PIN, o XP antigo não volta.
     let cloudResetOk = true;
-    if (cloudUser && cloudPin) {
+    if (cloudUser && cloudAccountId) {
         btn.disabled = true;
         btn.textContent = '☁️ Zerando Ranking...';
-        cloudResetOk = await window._resetCloudRanking(cloudUser, cloudPin, keepAvatar);
+        cloudResetOk = await window._resetCloudRanking(cloudUser, cloudPinHash, cloudAccountId, cloudOwnerSig, keepAvatar);
     }
 
     try {
@@ -4847,10 +4893,11 @@ window.handleResetProgress = async function () {
     state = createInitialState();
     state.avatar = keepAvatar;
     state.pcMode = keepPc;
-    // Mantém a identidade da conta, mas com pontuação/progresso zerados.
-    if (cloudUser && cloudPin) {
+    if (cloudUser && cloudAccountId) {
         state.cloudUser = cloudUser;
-        state.cloudPin = cloudPin;
+        state.cloudPinHash = cloudPinHash;
+        state.cloudAccountId = cloudAccountId;
+        state.cloudOwnerSig = cloudOwnerSig;
     }
 
     saveState();
@@ -4867,7 +4914,7 @@ window.handleResetProgress = async function () {
     btn.style.background = '#1f2937';
     btn.style.color = '#fda4af';
     showToast(cloudUser && !cloudResetOk
-        ? '⚠️ Progresso local reiniciado, mas não foi possível zerar o Ranking na nuvem. Tente novamente.'
+        ? '⚠️ Progresso local reiniciado, mas não foi possível zerar o Ranking na nuvem.'
         : '🔄 Todo o progresso e a pontuação do Ranking foram reiniciados!');
 };
 
@@ -4987,6 +5034,7 @@ window.closeBattleArena = function () {
     refreshHUD();
     renderWorldsView();
     renderInfiniteView();
+    renderShopView();
     renderOfficeView();
 };
 
@@ -5064,11 +5112,7 @@ function setupBattleTurn() {
     const optWrap = document.getElementById('battle-options');
     optWrap.innerHTML = '';
 
-    // Embaralha aleatoriamente a posição da resposta correta a cada questão.
-    // O conteúdo original nunca é alterado: apenas a posição exibida muda.
     const correctOriginalIdx = qObj.ans;
-    // Nova regra: sorteia a posição da resposta correta de forma independente em cada questão.
-    // Usa Web Crypto quando disponível e Math.random como fallback.
     const targetDisplayIdx = (window.crypto && typeof window.crypto.getRandomValues === 'function')
         ? (window.crypto.getRandomValues(new Uint32Array(1))[0] % 4)
         : Math.floor(Math.random() * 4);
@@ -5235,7 +5279,8 @@ window.handleOptionPick = function (pickedIdx) {
 
         const dmg = isCrit ? 35 : 25;
         const coinsGain = (isCrit ? 25 : 15) + Math.min(20, state.streak * 2);
-        const xpGain = isCrit ? 30 : 20;
+        const worldAlreadyCleared = battle.mode === 'world' && state.clearedWorlds.indexOf(battle.worldId) !== -1;
+        const xpGain = worldAlreadyCleared ? 0 : (isCrit ? 30 : 20);
 
         battle.bossHP = Math.max(0, battle.bossHP - dmg);
         state.coins += coinsGain;
@@ -5391,7 +5436,8 @@ function openEndgameModal(won) {
             newlyCleared = true;
         }
         state.coins += 75;
-        state.xp += 60;
+        const completionXpGain = (battle.mode === 'world' && !newlyCleared) ? 0 : 60;
+        state.xp += completionXpGain;
         refreshHUD();
 
         const nextWorld = WORLDS.find(function (w) { return w.id === battle.worldId + 1; });
@@ -5402,7 +5448,8 @@ function openEndgameModal(won) {
         icon.textContent = '🏆';
         title.textContent = battle.mode === 'review' ? 'MASMORRA CONCLUÍDA!' : 'MUNDO CONQUISTADO!';
         title.style.color = 'var(--gold-bright)';
-        desc.innerHTML = 'Você derrotou a Banca Examinadora e recebeu um bônus de <strong>+75 Honorários (💰)</strong> e <strong>+60 XP</strong>!' + unlockNotice;
+        const xpRewardText = completionXpGain > 0 ? ' e <strong>+60 XP</strong>' : ' (sem XP: mundo já concluído)';
+        desc.innerHTML = 'Você derrotou a Banca Examinadora e recebeu um bônus de <strong>+75 Honorários (💰)</strong>' + xpRewardText + '!' + unlockNotice;
     } else {
         playSound('hurt');
         icon.textContent = '📚';
@@ -5440,10 +5487,8 @@ renderWorldsView();
 
 // ============================================================================
 // INTEGRAÇÃO DIRETA COM FIREBASE (PROJETO: jurisquest-411f8)
-// CAMADA A: PIN nunca é enviado ao Firebase. O cliente usa SHA-256 e um
-// identificador opaco para separar os documentos privados do ranking público.
-// IMPORTANTE: a proteção real contra adulteração/acesso direto depende também
-// das Firebase Security Rules (Camada B), explicadas fora deste arquivo.
+// CAMADA A: PIN protegido por SHA-256 + verificação de assinatura (ownerSig)
+// para impedir que um PIN digitado errado crie contas duplicadas no Ranking.
 // ============================================================================
 const FIREBASE_PROJECT_ID = "jurisquest-411f8";
 const FIREBASE_API_KEY = "AIzaSyDI0UQADfXdAjaj-9BA_63qqxRi4anuKt8";
@@ -5464,28 +5509,45 @@ function normalizeUserKey(rawName) {
 }
 
 async function sha256Hex(value) {
-    const data = new TextEncoder().encode(String(value));
-    const digest = await crypto.subtle.digest("SHA-256", data);
-    return Array.from(new Uint8Array(digest)).map(function (b) {
-        return b.toString(16).padStart(2, "0");
-    }).join("");
+    const msgStr = String(value || "");
+    try {
+        if (window.crypto && window.crypto.subtle && typeof TextEncoder !== "undefined") {
+            const data = new TextEncoder().encode(msgStr);
+            const digest = await window.crypto.subtle.digest("SHA-256", data);
+            return Array.from(new Uint8Array(digest)).map(function (b) {
+                return b.toString(16).padStart(2, "0");
+            }).join("");
+        }
+    } catch (e) {}
+    let h1 = 0xdeadbeef ^ msgStr.length;
+    let h2 = 0x41c6ce57 ^ msgStr.length;
+    for (let i = 0, ch; i < msgStr.length; i++) {
+        ch = msgStr.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
 }
 
 async function deriveCloudCredentials(rawName, rawPin) {
     const normalizedName = normalizeUserKey(rawName);
     const pinHash = await sha256Hex(rawPin);
     const accountId = await sha256Hex(normalizedName + ":" + pinHash);
+    const ownerSig = await sha256Hex("jq_owner::" + normalizedName + "::" + accountId);
     return {
         normalizedName: normalizedName,
         pinHash: pinHash,
-        accountId: accountId
+        accountId: accountId,
+        ownerSig: ownerSig
     };
 }
 
 function buildPrivateSaveFields(st) {
     return {
         fields: {
-            displayName: { stringValue: String(st.cloudUser || "Estudante") },
+            displayName: { stringValue: String(st.cloudUser || "Estudante").replace(/[<>]/g, "").substring(0, 22) },
             avatar: { stringValue: getPlayerAvatar(st) },
             saveCode: { stringValue: encodeSaveCode(st) },
             updatedAt: { integerValue: String(Date.now()) }
@@ -5493,13 +5555,15 @@ function buildPrivateSaveFields(st) {
     };
 }
 
-function buildPublicLeaderboardFields(st) {
+function buildPublicLeaderboardFields(st, ownerSig) {
     return {
         fields: {
-            displayName: { stringValue: String(st.cloudUser || "Estudante") },
+            displayName: { stringValue: String(st.cloudUser || "Estudante").replace(/[<>]/g, "").substring(0, 22) },
+            ownerSig: { stringValue: String(ownerSig || st.cloudOwnerSig || "") },
             avatar: { stringValue: getPlayerAvatar(st) },
-            xp: { integerValue: String(st.xp || 0) },
-            level: { integerValue: String(st.level || 1) },
+            xp: { integerValue: String(Math.max(0, parseInt(st.xp, 10) || 0)) },
+            level: { integerValue: String(Math.max(1, parseInt(st.level, 10) || 1)) },
+            clearedCount: { integerValue: String((st.clearedWorlds || []).length) },
             masteredCount: { integerValue: String((st.masteredIds || []).length) }
         }
     };
@@ -5529,15 +5593,17 @@ function parseFirestoreLeaderboardDoc(docObj) {
     };
     return {
         displayName: getStr("displayName", "Estudante"),
+        ownerSig: getStr("ownerSig", ""),
         avatar: getStr("avatar", "👨‍🎓"),
         xp: getInt("xp", 0),
         level: getInt("level", 1),
+        clearedCount: getInt("clearedCount", 0),
         masteredCount: getInt("masteredCount", 0)
     };
 }
 
-function getCloudDocUrl(collection, accountId) {
-    return FIRESTORE_BASE_URL + "/" + collection + "/" + encodeURIComponent(accountId) + "?key=" + FIREBASE_API_KEY;
+function getCloudDocUrl(collection, docId) {
+    return FIRESTORE_BASE_URL + "/" + collection + "/" + encodeURIComponent(docId) + "?key=" + FIREBASE_API_KEY;
 }
 
 let cloudSyncDebounce = null;
@@ -5546,18 +5612,21 @@ window._syncCloudState = function (currentState) {
     clearTimeout(cloudSyncDebounce);
     cloudSyncDebounce = setTimeout(async function () {
         try {
+            const userKey = normalizeUserKey(currentState.cloudUser);
             const saveUrl = getCloudDocUrl(FIREBASE_SAVE_COLLECTION, currentState.cloudAccountId);
-            const rankUrl = getCloudDocUrl(FIREBASE_RANK_COLLECTION, currentState.cloudAccountId);
-            await fetch(saveUrl, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(buildPrivateSaveFields(currentState))
-            });
-            await fetch(rankUrl, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(buildPublicLeaderboardFields(currentState))
-            });
+            const rankUrl = getCloudDocUrl(FIREBASE_RANK_COLLECTION, userKey);
+            await Promise.all([
+                fetch(saveUrl, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(buildPrivateSaveFields(currentState))
+                }),
+                fetch(rankUrl, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(buildPublicLeaderboardFields(currentState, currentState.cloudOwnerSig))
+                })
+            ]);
         } catch (e) {}
     }, 600);
 };
@@ -5565,7 +5634,7 @@ window._syncCloudState = function (currentState) {
 window.handleCloudAuth = async function (sourcePrefix) {
     const nameInput = document.getElementById(sourcePrefix + "-cloud-name");
     const pinInput = document.getElementById(sourcePrefix + "-cloud-pin");
-    const rawName = nameInput ? nameInput.value.trim() : "";
+    const rawName = nameInput ? nameInput.value.trim().replace(/[<>]/g, "") : "";
     const rawPin = pinInput ? pinInput.value.trim() : "";
 
     if (!rawName || rawName.length < 2) {
@@ -5575,7 +5644,7 @@ window.handleCloudAuth = async function (sourcePrefix) {
     }
     if (!/^[0-9]{4,8}$/.test(rawPin)) {
         playSound("hurt");
-        showToast("⚠️ Crie um PIN simples de 4 a 8 dígitos. Não use sua senha pessoal.");
+        showToast("⚠️ Crie um PIN numérico simples de 4 a 8 dígitos.");
         return;
     }
 
@@ -5586,10 +5655,23 @@ window.handleCloudAuth = async function (sourcePrefix) {
     }
 
     showToast("☁️ Protegendo seu PIN localmente e conectando ao Firebase...");
-    const docUrl = getCloudDocUrl(FIREBASE_SAVE_COLLECTION, creds.accountId);
+    const rankUrl = getCloudDocUrl(FIREBASE_RANK_COLLECTION, creds.normalizedName);
+    const saveUrl = getCloudDocUrl(FIREBASE_SAVE_COLLECTION, creds.accountId);
 
     try {
-        const res = await fetch(docUrl, { method: "GET" });
+        // 1. Confere se o apelido já tem dono no Ranking (impede PIN incorreto de criar duplicata!)
+        const rankCheck = await fetch(rankUrl, { method: "GET" });
+        if (rankCheck.status === 200) {
+            const existingRank = parseFirestoreLeaderboardDoc(await rankCheck.json());
+            if (existingRank && existingRank.ownerSig && existingRank.ownerSig !== creds.ownerSig) {
+                playSound("hurt");
+                showToast("❌ PIN incorreto para o apelido '" + existingRank.displayName + "'!");
+                return;
+            }
+        }
+
+        // 2. Busca o save privado correspondente ao accountId
+        const res = await fetch(saveUrl, { method: "GET" });
         if (res.status === 200) {
             const existing = parseFirestoreSaveDoc(await res.json());
             if (existing && existing.saveCode) {
@@ -5602,6 +5684,7 @@ window.handleCloudAuth = async function (sourcePrefix) {
                         cloudRestored.cloudUser = existing.displayName || rawName;
                         cloudRestored.cloudPinHash = creds.pinHash;
                         cloudRestored.cloudAccountId = creds.accountId;
+                        cloudRestored.cloudOwnerSig = creds.ownerSig;
                         if (existing.avatar && AVATARS.indexOf(existing.avatar) !== -1) cloudRestored.avatar = existing.avatar;
                         state = cloudRestored;
                     }
@@ -5611,34 +5694,42 @@ window.handleCloudAuth = async function (sourcePrefix) {
             state.cloudUser = existing && existing.displayName ? existing.displayName : rawName;
             state.cloudPinHash = creds.pinHash;
             state.cloudAccountId = creds.accountId;
+            state.cloudOwnerSig = creds.ownerSig;
+            if (pinInput) pinInput.value = "";
             saveState();
 
-            await fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, creds.accountId), {
-                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPrivateSaveFields(state))
-            });
-            await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, creds.accountId), {
-                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPublicLeaderboardFields(state))
-            });
+            await Promise.all([
+                fetch(saveUrl, {
+                    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPrivateSaveFields(state))
+                }),
+                fetch(rankUrl, {
+                    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPublicLeaderboardFields(state, creds.ownerSig))
+                })
+            ]);
 
             playSound("win");
             refreshHUD(); refreshStartScreenUI(); renderWorldsView(); renderInfiniteView(); renderShopView(); renderOfficeView();
             const startCloudDrawer = document.getElementById("start-cloud-box");
             if (startCloudDrawer) startCloudDrawer.classList.remove("open");
             if (sourcePrefix === "modal") window.closeSaveModal();
-            showToast("✅ Conta Nuvem '" + state.cloudUser + "' sincronizada! PIN nunca foi enviado ao Firebase.");
+            showToast("✅ Conta Nuvem '" + state.cloudUser + "' sincronizada!");
             window.fetchCloudLeaderboard(false);
         } else if (res.status === 404) {
             state.cloudUser = rawName;
             state.cloudPinHash = creds.pinHash;
             state.cloudAccountId = creds.accountId;
-            const createSave = await fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, creds.accountId), {
-                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPrivateSaveFields(state))
-            });
-            if (!createSave.ok) throw new Error("Falha ao criar save privado");
-            const createRank = await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, creds.accountId), {
-                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPublicLeaderboardFields(state))
-            });
-            if (!createRank.ok) throw new Error("Falha ao criar ranking público");
+            state.cloudOwnerSig = creds.ownerSig;
+            if (pinInput) pinInput.value = "";
+
+            const [createSave, createRank] = await Promise.all([
+                fetch(saveUrl, {
+                    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPrivateSaveFields(state))
+                }),
+                fetch(rankUrl, {
+                    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPublicLeaderboardFields(state, creds.ownerSig))
+                })
+            ]);
+            if (!createSave.ok || !createRank.ok) throw new Error("Falha ao criar conta na nuvem");
 
             saveState();
             playSound("win");
@@ -5646,7 +5737,7 @@ window.handleCloudAuth = async function (sourcePrefix) {
             const startCloudDrawer = document.getElementById("start-cloud-box");
             if (startCloudDrawer) startCloudDrawer.classList.remove("open");
             if (sourcePrefix === "modal") window.closeSaveModal();
-            showToast("🎉 Conta criada! Seu PIN ficou somente neste aparelho em forma de hash.");
+            showToast("🎉 Conta criada! Seu PIN ficou protegido por SHA-256.");
             window.fetchCloudLeaderboard(false);
         } else {
             throw new Error("Status HTTP " + res.status);
@@ -5662,6 +5753,7 @@ window.logoutCloudAccount = function () {
     state.cloudUser = "";
     state.cloudPinHash = "";
     state.cloudAccountId = "";
+    state.cloudOwnerSig = "";
     ["start-cloud-name", "start-cloud-pin", "office-cloud-name", "office-cloud-pin", "modal-cloud-name", "modal-cloud-pin"].forEach(function (id) {
         const el = document.getElementById(id);
         if (el) el.value = "";
@@ -5671,40 +5763,44 @@ window.logoutCloudAccount = function () {
     showToast("☁️ Conta desconectada deste aparelho.");
 };
 
+let deleteCloudConfirmArmed = false;
 window.deleteCloudAccount = async function () {
-    if (!state.cloudUser || !state.cloudAccountId || !state.cloudPinHash) {
+    if (!state.cloudUser || !state.cloudAccountId) {
+        playSound("hurt");
         showToast("⚠️ Conecte sua conta na nuvem antes de excluí-la.");
         return;
     }
-    const pin = window.prompt("Digite novamente seu PIN de 4 a 8 dígitos para excluir a conta da nuvem:");
-    if (pin === null) return;
-    if (!/^[0-9]{4,8}$/.test(pin)) {
-        showToast("⚠️ PIN inválido.");
+    if (!deleteCloudConfirmArmed) {
+        deleteCloudConfirmArmed = true;
+        playSound("tap");
+        showToast("⚠️ Toque novamente no botão vermelho em até 4s para confirmar a exclusão da conta na nuvem!");
+        setTimeout(function () {
+            deleteCloudConfirmArmed = false;
+        }, 4000);
         return;
     }
-    const pinHash = await sha256Hex(pin);
-    if (pinHash !== state.cloudPinHash) {
-        playSound("hurt");
-        showToast("❌ PIN incorreto. A conta não foi excluída.");
-        return;
-    }
-    if (!window.confirm("ATENÇÃO: isso apagará seu save privado e sua posição no Ranking da nuvem. Esta ação não pode ser desfeita. Continuar?")) return;
+    deleteCloudConfirmArmed = false;
 
     try {
-        const saveRes = await fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, state.cloudAccountId), { method: "DELETE" });
-        const rankRes = await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, state.cloudAccountId), { method: "DELETE" });
+        const userKey = normalizeUserKey(state.cloudUser);
+        const [saveRes, rankRes] = await Promise.all([
+            fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, state.cloudAccountId), { method: "DELETE" }),
+            fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, userKey), { method: "DELETE" })
+        ]);
         if (!([200, 204, 404].indexOf(saveRes.status) !== -1 && [200, 204, 404].indexOf(rankRes.status) !== -1)) {
             throw new Error("Falha ao excluir dados");
         }
         state.cloudUser = "";
         state.cloudPinHash = "";
         state.cloudAccountId = "";
+        state.cloudOwnerSig = "";
         saveState();
         refreshStartScreenUI();
         renderOfficeView();
         refreshCloudBadgesUI();
+        window.fetchCloudLeaderboard(false);
         playSound("win");
-        showToast("🗑️ Conta excluída da nuvem com sucesso.");
+        showToast("🗑️ Conta e posição no Ranking excluídas da nuvem com sucesso.");
     } catch (e) {
         playSound("hurt");
         showToast("⚠️ Não foi possível excluir a conta agora. Tente novamente.");
@@ -5721,8 +5817,11 @@ window.fetchCloudLeaderboard = async function (notifyToast) {
 
     if (state.cloudUser && state.cloudAccountId) {
         try {
-            await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, state.cloudAccountId), {
-                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPublicLeaderboardFields(state))
+            const userKey = normalizeUserKey(state.cloudUser);
+            await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, userKey), {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(buildPublicLeaderboardFields(state, state.cloudOwnerSig))
             });
         } catch (e) {}
     }
@@ -5746,7 +5845,6 @@ window.fetchCloudLeaderboard = async function (notifyToast) {
             return;
         }
 
-        const myAccountId = state.cloudAccountId || "";
         players.slice(0, 30).forEach(function (p, idx) {
             const pos = idx + 1;
             let medal = pos + "º";
@@ -5755,16 +5853,18 @@ window.fetchCloudLeaderboard = async function (notifyToast) {
             else if (pos === 2) { medal = "🥈 2º"; topClass = " top-2"; }
             else if (pos === 3) { medal = "🥉 3º"; topClass = " top-3"; }
             const rankObj = getRankObj(p.level || 1);
-            const accountIdFromRow = p.displayName ? "" : "";
             const isMe = state.cloudUser && normalizeUserKey(p.displayName) === normalizeUserKey(state.cloudUser);
+            const safeName = escapeHtml(p.displayName);
+            const safeAvatar = AVATARS.indexOf(p.avatar) !== -1 ? p.avatar : "👨‍🎓";
+
             const card = document.createElement("div");
             card.className = "rank-row-card" + topClass + (isMe ? " is-me" : "");
             card.innerHTML = '<div style="display: flex; align-items: center; gap: 10px; min-width: 0;">' +
                 '<div style="font-size: 13px; font-weight: 900; color: var(--gold-bright); min-width: 42px;">' + medal + '</div>' +
-                '<div class="hud-avatar" style="width: 36px; height: 36px; font-size: 18px;">' + (p.avatar || "👨‍🎓") + '</div>' +
-                '<div style="min-width: 0;"><div style="font-size: 13px; font-weight: 900; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + p.displayName + (isMe ? ' <span style="color: var(--emerald); font-size: 10px;">(Você)</span>' : '') + '</div>' +
-                '<div style="font-size: 10.5px; color: #cbd5e1; font-weight: 700;">Nvl ' + p.level + ' • ' + rankObj.title + '</div></div></div>' +
-                '<div style="text-align: right; flex-shrink: 0;"><div style="font-size: 13px; font-weight: 900; color: var(--gold-bright);">' + p.xp + ' XP</div><div style="font-size: 10px; color: var(--emerald); font-weight: 800;">📚 ' + p.masteredCount + '/90 OAB</div></div>';
+                '<div class="hud-avatar" style="width: 36px; height: 36px; font-size: 18px;">' + safeAvatar + '</div>' +
+                '<div style="min-width: 0;"><div style="font-size: 13px; font-weight: 900; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + safeName + (isMe ? ' <span style="color: var(--emerald); font-size: 10px;">(Você)</span>' : '') + '</div>' +
+                '<div style="font-size: 10.5px; color: #cbd5e1; font-weight: 700;">Nvl ' + (parseInt(p.level, 10) || 1) + ' • ' + escapeHtml(rankObj.title) + ' • 🏆 ' + (parseInt(p.clearedCount, 10) || 0) + '/9 Mundos</div></div></div>' +
+                '<div style="text-align: right; flex-shrink: 0;"><div style="font-size: 13px; font-weight: 900; color: var(--gold-bright);">' + (parseInt(p.xp, 10) || 0) + ' XP</div><div style="font-size: 10px; color: var(--emerald); font-weight: 800;">📚 ' + (parseInt(p.masteredCount, 10) || 0) + '/90 OAB</div></div>';
             container.appendChild(card);
         });
     } catch (e) {
@@ -5785,6 +5885,7 @@ window.fetchCloudLeaderboard = async function (notifyToast) {
                     cloudRestored.cloudUser = state.cloudUser;
                     cloudRestored.cloudPinHash = state.cloudPinHash;
                     cloudRestored.cloudAccountId = state.cloudAccountId;
+                    cloudRestored.cloudOwnerSig = state.cloudOwnerSig;
                     if (existing.avatar && AVATARS.indexOf(existing.avatar) !== -1) cloudRestored.avatar = existing.avatar;
                     state = cloudRestored;
                     refreshHUD(); refreshStartScreenUI(); renderWorldsView();
