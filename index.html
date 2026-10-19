@@ -1814,12 +1814,12 @@
                         ☁️ Conta na Nuvem JurisQuest (Salva no Firebase e entra no Ranking):
                     </div>
                     <p style="font-size: 10.5px; color: #cbd5e1; line-height: 1.35;">
-                        Digite seu Nome/Apelido e crie um PIN (4 a 8 dígitos). Se já tiver conta, digite o mesmo Nome e PIN para carregar seu progresso em qualquer celular ou PC!
+                        Digite seu Nome/Apelido e crie um PIN simples de 4 a 8 dígitos. O PIN é transformado em SHA-256 no navegador e não é enviado ao Firebase. <strong>Nunca use senha de banco, e-mail, celular ou outra senha pessoal aqui.</strong>
                     </p>
                     <div class="grid-2" style="gap: 6px;">
                         <input id="start-cloud-name" type="text" maxlength="22" placeholder="Seu Nome ou Apelido"
                             style="width: 100%; background: #050811; border: 1px solid #334155; color: #fff; padding: 9px 10px; border-radius: 9px; font-size: 11.5px; font-weight: 700;" />
-                        <input id="start-cloud-pin" type="password" maxlength="12" placeholder="Senha / PIN (ex: 1234)"
+                        <input id="start-cloud-pin" type="password" maxlength="12" placeholder="PIN simples (ex: 1234)"
                             style="width: 100%; background: #050811; border: 1px solid #334155; color: #fff; padding: 9px 10px; border-radius: 9px; font-size: 11.5px; font-weight: 700;" />
                     </div>
                     <button class="btn-rpg-emerald" style="width: 100%; margin-top: 2px;" onclick="window.handleCloudAuth('start')">
@@ -2051,7 +2051,7 @@
                 <div class="grid-2" style="gap: 6px;">
                     <input id="office-cloud-name" type="text" maxlength="22" placeholder="Seu Nome / Apelido"
                         style="width: 100%; background: #050811; border: 1px solid #334155; color: #fff; padding: 9px 10px; border-radius: 10px; font-size: 11.5px; font-weight: 700;" />
-                    <input id="office-cloud-pin" type="password" maxlength="12" placeholder="Senha / PIN (ex: 1234)"
+                    <input id="office-cloud-pin" type="password" maxlength="12" placeholder="PIN simples (ex: 1234)"
                         style="width: 100%; background: #050811; border: 1px solid #334155; color: #fff; padding: 9px 10px; border-radius: 10px; font-size: 11.5px; font-weight: 700;" />
                 </div>
                 <div style="display: flex; gap: 6px;">
@@ -2097,6 +2097,12 @@
                 <button id="btn-reset-save" onclick="window.handleResetProgress()" style="background: #1f2937; border: 1px solid #f43f5e; color: #fda4af; padding: 10px; border-radius: 10px; font-size: 11.5px; font-weight: 800; text-transform: uppercase;">
                     🗑️ Resetar Todo o Progresso
                 </button>
+                <button onclick="window.deleteCloudAccount()" style="background: #450a0a; border: 1px solid #ef4444; color: #fecaca; padding: 10px; border-radius: 10px; font-size: 11.5px; font-weight: 800; text-transform: uppercase;">
+                    ☁️ Excluir Minha Conta da Nuvem
+                </button>
+                <p style="font-size: 10.5px; color: #fda4af; line-height: 1.35;">
+                    ⚠️ A exclusão remove seu save privado e sua posição no Ranking da nuvem. Crie um PIN simples e exclusivo para o JurisQuest; nunca reutilize uma senha pessoal.
+                </p>
             </div>
         </section>
 
@@ -2287,7 +2293,7 @@
                     <div class="grid-2" style="gap: 6px; margin-bottom: 8px;">
                         <input id="modal-cloud-name" type="text" maxlength="22" placeholder="Seu Nome / Apelido"
                             style="width: 100%; background: #111827; border: 1px solid var(--emerald); color: #fff; padding: 9px; border-radius: 8px; font-size: 11.5px; font-weight: 700;" />
-                        <input id="modal-cloud-pin" type="password" maxlength="12" placeholder="Senha / PIN (ex: 1234)"
+                        <input id="modal-cloud-pin" type="password" maxlength="12" placeholder="PIN simples (ex: 1234)"
                             style="width: 100%; background: #111827; border: 1px solid var(--emerald); color: #fff; padding: 9px; border-radius: 8px; font-size: 11.5px; font-weight: 700;" />
                     </div>
                     <button class="btn-rpg-emerald" style="width: 100%;" onclick="window.handleCloudAuth('modal')">
@@ -3935,7 +3941,8 @@ function createInitialState() {
         pcMode: window.innerWidth >= 960,
         avatar: "👨‍🎓",
         cloudUser: "",
-        cloudPin: "",
+        cloudPinHash: "",
+        cloudAccountId: "",
         items: { vade: 2, cafe: 2, sumula: 2, embargos: 1 },
         masteredIds: [],
         wrongIds: [],
@@ -4221,6 +4228,10 @@ function normalizeLoadedState(parsed) {
     merged.wrongIds = Array.isArray(parsed && parsed.wrongIds) ? parsed.wrongIds : [];
     merged.clearedWorlds = Array.isArray(parsed && parsed.clearedWorlds) ? parsed.clearedWorlds : [];
     merged.avatar = (parsed && parsed.avatar && AVATARS.indexOf(parsed.avatar) !== -1) ? parsed.avatar : def.avatar;
+    merged.cloudPinHash = typeof merged.cloudPinHash === "string" ? merged.cloudPinHash : "";
+    merged.cloudAccountId = typeof merged.cloudAccountId === "string" ? merged.cloudAccountId : "";
+    // Versões antigas guardavam cloudPin; ele é descartado e a conta antiga precisa ser reconectada.
+    delete merged.cloudPin;
     return merged;
 }
 
@@ -5429,12 +5440,16 @@ renderWorldsView();
 
 // ============================================================================
 // INTEGRAÇÃO DIRETA COM FIREBASE (PROJETO: jurisquest-411f8)
-// Usa a API REST oficial do Cloud Firestore + SDK para funcionar 100% no
-// Google Sites e iPhone (sem bloqueio de cookies ou pop-ups de terceiros).
+// CAMADA A: PIN nunca é enviado ao Firebase. O cliente usa SHA-256 e um
+// identificador opaco para separar os documentos privados do ranking público.
+// IMPORTANTE: a proteção real contra adulteração/acesso direto depende também
+// das Firebase Security Rules (Camada B), explicadas fora deste arquivo.
 // ============================================================================
 const FIREBASE_PROJECT_ID = "jurisquest-411f8";
 const FIREBASE_API_KEY = "AIzaSyDI0UQADfXdAjaj-9BA_63qqxRi4anuKt8";
 const FIRESTORE_BASE_URL = "https://firestore.googleapis.com/v1/projects/" + FIREBASE_PROJECT_ID + "/databases/(default)/documents";
+const FIREBASE_SAVE_COLLECTION = "saves";
+const FIREBASE_RANK_COLLECTION = "leaderboard";
 
 function normalizeUserKey(rawName) {
     if (!rawName) return "";
@@ -5448,64 +5463,100 @@ function normalizeUserKey(rawName) {
         .substring(0, 28);
 }
 
-function buildFirestoreFieldsFromState(st, pinToStore) {
-    const rankObj = getRankObj(st.level || 1);
-    const chosenAvatar = getPlayerAvatar(st);
-    const saveCode = encodeSaveCode(st);
+async function sha256Hex(value) {
+    const data = new TextEncoder().encode(String(value));
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(digest)).map(function (b) {
+        return b.toString(16).padStart(2, "0");
+    }).join("");
+}
+
+async function deriveCloudCredentials(rawName, rawPin) {
+    const normalizedName = normalizeUserKey(rawName);
+    const pinHash = await sha256Hex(rawPin);
+    const accountId = await sha256Hex(normalizedName + ":" + pinHash);
+    return {
+        normalizedName: normalizedName,
+        pinHash: pinHash,
+        accountId: accountId
+    };
+}
+
+function buildPrivateSaveFields(st) {
     return {
         fields: {
             displayName: { stringValue: String(st.cloudUser || "Estudante") },
-            pin: { stringValue: String(pinToStore || st.cloudPin || "") },
-            xp: { integerValue: String(st.xp || 0) },
-            level: { integerValue: String(st.level || 1) },
-            coins: { integerValue: String(st.coins || 0) },
-            masteredCount: { integerValue: String((st.masteredIds || []).length) },
-            clearedCount: { integerValue: String((st.clearedWorlds || []).length) },
-            bestInfinite: { integerValue: String(st.bestInfinite || 0) },
-            rankTitle: { stringValue: rankObj.title },
-            avatar: { stringValue: chosenAvatar },
-            saveCode: { stringValue: saveCode },
+            avatar: { stringValue: getPlayerAvatar(st) },
+            saveCode: { stringValue: encodeSaveCode(st) },
             updatedAt: { integerValue: String(Date.now()) }
         }
     };
 }
 
-function parseFirestorePlayerDoc(docObj) {
+function buildPublicLeaderboardFields(st) {
+    return {
+        fields: {
+            displayName: { stringValue: String(st.cloudUser || "Estudante") },
+            avatar: { stringValue: getPlayerAvatar(st) },
+            xp: { integerValue: String(st.xp || 0) },
+            level: { integerValue: String(st.level || 1) },
+            masteredCount: { integerValue: String((st.masteredIds || []).length) }
+        }
+    };
+}
+
+function parseFirestoreSaveDoc(docObj) {
     if (!docObj || !docObj.fields) return null;
     const f = docObj.fields;
-    const getStr = function (k, def) { return (f[k] && f[k].stringValue !== undefined) ? f[k].stringValue : (def || ""); };
-    const getInt = function (k, def) { return (f[k] && f[k].integerValue !== undefined) ? (parseInt(f[k].integerValue, 10) || 0) : (def || 0); };
-
+    const getStr = function (k, def) {
+        return (f[k] && f[k].stringValue !== undefined) ? f[k].stringValue : (def || "");
+    };
     return {
         displayName: getStr("displayName", "Estudante"),
-        pin: getStr("pin", ""),
+        avatar: getStr("avatar", "👨‍🎓"),
+        saveCode: getStr("saveCode", "")
+    };
+}
+
+function parseFirestoreLeaderboardDoc(docObj) {
+    if (!docObj || !docObj.fields) return null;
+    const f = docObj.fields;
+    const getStr = function (k, def) {
+        return (f[k] && f[k].stringValue !== undefined) ? f[k].stringValue : (def || "");
+    };
+    const getInt = function (k, def) {
+        return (f[k] && f[k].integerValue !== undefined) ? (parseInt(f[k].integerValue, 10) || 0) : (def || 0);
+    };
+    return {
+        displayName: getStr("displayName", "Estudante"),
+        avatar: getStr("avatar", "👨‍🎓"),
         xp: getInt("xp", 0),
         level: getInt("level", 1),
-        coins: getInt("coins", 120),
-        masteredCount: getInt("masteredCount", 0),
-        clearedCount: getInt("clearedCount", 0),
-        bestInfinite: getInt("bestInfinite", 0),
-        rankTitle: getStr("rankTitle", "Estagiário Nvl 1"),
-        avatar: getStr("avatar", "👨‍🎓"),
-        saveCode: getStr("saveCode", ""),
-        updatedAt: getInt("updatedAt", 0)
+        masteredCount: getInt("masteredCount", 0)
     };
+}
+
+function getCloudDocUrl(collection, accountId) {
+    return FIRESTORE_BASE_URL + "/" + collection + "/" + encodeURIComponent(accountId) + "?key=" + FIREBASE_API_KEY;
 }
 
 let cloudSyncDebounce = null;
 window._syncCloudState = function (currentState) {
-    if (!currentState || !currentState.cloudUser || !currentState.cloudPin) return;
+    if (!currentState || !currentState.cloudUser || !currentState.cloudAccountId) return;
     clearTimeout(cloudSyncDebounce);
     cloudSyncDebounce = setTimeout(async function () {
-        const userKey = normalizeUserKey(currentState.cloudUser);
-        if (!userKey) return;
-        const url = FIRESTORE_BASE_URL + "/players/" + encodeURIComponent(userKey) + "?key=" + FIREBASE_API_KEY;
-        const bodyData = buildFirestoreFieldsFromState(currentState, currentState.cloudPin);
         try {
-            await fetch(url, {
+            const saveUrl = getCloudDocUrl(FIREBASE_SAVE_COLLECTION, currentState.cloudAccountId);
+            const rankUrl = getCloudDocUrl(FIREBASE_RANK_COLLECTION, currentState.cloudAccountId);
+            await fetch(saveUrl, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(bodyData)
+                body: JSON.stringify(buildPrivateSaveFields(currentState))
+            });
+            await fetch(rankUrl, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(buildPublicLeaderboardFields(currentState))
             });
         } catch (e) {}
     }, 600);
@@ -5522,33 +5573,25 @@ window.handleCloudAuth = async function (sourcePrefix) {
         showToast("⚠️ Digite seu Nome ou Apelido (mínimo 2 letras).");
         return;
     }
-    if (!rawPin || rawPin.length < 3) {
+    if (!/^[0-9]{4,8}$/.test(rawPin)) {
         playSound("hurt");
-        showToast("⚠️ Digite uma Senha/PIN de pelo menos 3 caracteres.");
+        showToast("⚠️ Crie um PIN simples de 4 a 8 dígitos. Não use sua senha pessoal.");
         return;
     }
 
-    const userKey = normalizeUserKey(rawName);
-    if (!userKey) {
+    const creds = await deriveCloudCredentials(rawName, rawPin);
+    if (!creds.normalizedName) {
         showToast("⚠️ Use letras ou números no seu Apelido.");
         return;
     }
 
-    showToast("☁️ Conectando ao Firebase jurisquest-411f8...");
-    const docUrl = FIRESTORE_BASE_URL + "/players/" + encodeURIComponent(userKey) + "?key=" + FIREBASE_API_KEY;
+    showToast("☁️ Protegendo seu PIN localmente e conectando ao Firebase...");
+    const docUrl = getCloudDocUrl(FIREBASE_SAVE_COLLECTION, creds.accountId);
 
     try {
         const res = await fetch(docUrl, { method: "GET" });
         if (res.status === 200) {
-            const docJson = await res.json();
-            const existing = parseFirestorePlayerDoc(docJson);
-            if (existing && existing.pin && existing.pin !== rawPin) {
-                playSound("hurt");
-                showToast("❌ Senha/PIN incorreto para o apelido '" + existing.displayName + "'!");
-                return;
-            }
-
-            // Se o progresso da nuvem for maior que o local (ou se o local estiver zerado), restaura da nuvem
+            const existing = parseFirestoreSaveDoc(await res.json());
             if (existing && existing.saveCode) {
                 const cloudRestored = decodeSaveCode(existing.saveCode);
                 if (cloudRestored) {
@@ -5556,65 +5599,54 @@ window.handleCloudAuth = async function (sourcePrefix) {
                     const localScore = (state.xp || 0) + (state.masteredIds.length * 25);
                     if (cloudScore >= localScore) {
                         cloudRestored.pcMode = state.pcMode;
-                        if (existing.avatar && AVATARS.indexOf(existing.avatar) !== -1) {
-                            cloudRestored.avatar = existing.avatar;
-                        }
+                        cloudRestored.cloudUser = existing.displayName || rawName;
+                        cloudRestored.cloudPinHash = creds.pinHash;
+                        cloudRestored.cloudAccountId = creds.accountId;
+                        if (existing.avatar && AVATARS.indexOf(existing.avatar) !== -1) cloudRestored.avatar = existing.avatar;
                         state = cloudRestored;
                     }
                 }
             }
 
-            state.cloudUser = existing ? existing.displayName : rawName;
-            state.cloudPin = rawPin;
+            state.cloudUser = existing && existing.displayName ? existing.displayName : rawName;
+            state.cloudPinHash = creds.pinHash;
+            state.cloudAccountId = creds.accountId;
             saveState();
 
-            // Envia versão sincronizada de volta à nuvem
-            await fetch(docUrl, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(buildFirestoreFieldsFromState(state, rawPin))
+            await fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, creds.accountId), {
+                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPrivateSaveFields(state))
+            });
+            await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, creds.accountId), {
+                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPublicLeaderboardFields(state))
             });
 
             playSound("win");
-            refreshHUD();
-            refreshStartScreenUI();
-            renderWorldsView();
-            renderInfiniteView();
-            renderShopView();
-            renderOfficeView();
-
+            refreshHUD(); refreshStartScreenUI(); renderWorldsView(); renderInfiniteView(); renderShopView(); renderOfficeView();
             const startCloudDrawer = document.getElementById("start-cloud-box");
             if (startCloudDrawer) startCloudDrawer.classList.remove("open");
             if (sourcePrefix === "modal") window.closeSaveModal();
-
-            showToast("✅ Conta Nuvem '" + state.cloudUser + "' sincronizada!");
+            showToast("✅ Conta Nuvem '" + state.cloudUser + "' sincronizada! PIN nunca foi enviado ao Firebase.");
             window.fetchCloudLeaderboard(false);
         } else if (res.status === 404) {
-            // Cria nova conta na nuvem com o progresso atual do jogador
             state.cloudUser = rawName;
-            state.cloudPin = rawPin;
-            const createRes = await fetch(docUrl, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(buildFirestoreFieldsFromState(state, rawPin))
+            state.cloudPinHash = creds.pinHash;
+            state.cloudAccountId = creds.accountId;
+            const createSave = await fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, creds.accountId), {
+                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPrivateSaveFields(state))
             });
-
-            if (!createRes.ok) {
-                throw new Error("Falha ao gravar no Firestore");
-            }
+            if (!createSave.ok) throw new Error("Falha ao criar save privado");
+            const createRank = await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, creds.accountId), {
+                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPublicLeaderboardFields(state))
+            });
+            if (!createRank.ok) throw new Error("Falha ao criar ranking público");
 
             saveState();
             playSound("win");
-            refreshHUD();
-            refreshStartScreenUI();
-            renderWorldsView();
-            renderOfficeView();
-
+            refreshHUD(); refreshStartScreenUI(); renderWorldsView(); renderOfficeView();
             const startCloudDrawer = document.getElementById("start-cloud-box");
             if (startCloudDrawer) startCloudDrawer.classList.remove("open");
             if (sourcePrefix === "modal") window.closeSaveModal();
-
-            showToast("🎉 Conta '" + rawName + "' criada na Nuvem Firebase!");
+            showToast("🎉 Conta criada! Seu PIN ficou somente neste aparelho em forma de hash.");
             window.fetchCloudLeaderboard(false);
         } else {
             throw new Error("Status HTTP " + res.status);
@@ -5628,7 +5660,8 @@ window.handleCloudAuth = async function (sourcePrefix) {
 window.logoutCloudAccount = function () {
     playSound("tap");
     state.cloudUser = "";
-    state.cloudPin = "";
+    state.cloudPinHash = "";
+    state.cloudAccountId = "";
     ["start-cloud-name", "start-cloud-pin", "office-cloud-name", "office-cloud-pin", "modal-cloud-name", "modal-cloud-pin"].forEach(function (id) {
         const el = document.getElementById(id);
         if (el) el.value = "";
@@ -5636,6 +5669,46 @@ window.logoutCloudAccount = function () {
     saveState();
     refreshStartScreenUI();
     showToast("☁️ Conta desconectada deste aparelho.");
+};
+
+window.deleteCloudAccount = async function () {
+    if (!state.cloudUser || !state.cloudAccountId || !state.cloudPinHash) {
+        showToast("⚠️ Conecte sua conta na nuvem antes de excluí-la.");
+        return;
+    }
+    const pin = window.prompt("Digite novamente seu PIN de 4 a 8 dígitos para excluir a conta da nuvem:");
+    if (pin === null) return;
+    if (!/^[0-9]{4,8}$/.test(pin)) {
+        showToast("⚠️ PIN inválido.");
+        return;
+    }
+    const pinHash = await sha256Hex(pin);
+    if (pinHash !== state.cloudPinHash) {
+        playSound("hurt");
+        showToast("❌ PIN incorreto. A conta não foi excluída.");
+        return;
+    }
+    if (!window.confirm("ATENÇÃO: isso apagará seu save privado e sua posição no Ranking da nuvem. Esta ação não pode ser desfeita. Continuar?")) return;
+
+    try {
+        const saveRes = await fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, state.cloudAccountId), { method: "DELETE" });
+        const rankRes = await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, state.cloudAccountId), { method: "DELETE" });
+        if (!([200, 204, 404].indexOf(saveRes.status) !== -1 && [200, 204, 404].indexOf(rankRes.status) !== -1)) {
+            throw new Error("Falha ao excluir dados");
+        }
+        state.cloudUser = "";
+        state.cloudPinHash = "";
+        state.cloudAccountId = "";
+        saveState();
+        refreshStartScreenUI();
+        renderOfficeView();
+        refreshCloudBadgesUI();
+        playSound("win");
+        showToast("🗑️ Conta excluída da nuvem com sucesso.");
+    } catch (e) {
+        playSound("hurt");
+        showToast("⚠️ Não foi possível excluir a conta agora. Tente novamente.");
+    }
 };
 
 window.fetchCloudLeaderboard = async function (notifyToast) {
@@ -5646,47 +5719,34 @@ window.fetchCloudLeaderboard = async function (notifyToast) {
         showToast("🔄 Atualizando Ranking da Nuvem...");
     }
 
-    // Se o jogador estiver logado, garante que o dado dele está atualizado antes de listar
-    if (state.cloudUser && state.cloudPin) {
-        const myKey = normalizeUserKey(state.cloudUser);
-        const myUrl = FIRESTORE_BASE_URL + "/players/" + encodeURIComponent(myKey) + "?key=" + FIREBASE_API_KEY;
+    if (state.cloudUser && state.cloudAccountId) {
         try {
-            await fetch(myUrl, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(buildFirestoreFieldsFromState(state, state.cloudPin))
+            await fetch(getCloudDocUrl(FIREBASE_RANK_COLLECTION, state.cloudAccountId), {
+                method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPublicLeaderboardFields(state))
             });
         } catch (e) {}
     }
 
     try {
-        const listUrl = FIRESTORE_BASE_URL + "/players?pageSize=100&key=" + FIREBASE_API_KEY;
+        const listUrl = FIRESTORE_BASE_URL + "/" + FIREBASE_RANK_COLLECTION + "?pageSize=100&key=" + FIREBASE_API_KEY;
         const res = await fetch(listUrl, { method: "GET" });
         if (!res.ok) throw new Error("Falha ao buscar ranking");
         const data = await res.json();
         const docs = Array.isArray(data.documents) ? data.documents : [];
-
-        const players = docs.map(parseFirestorePlayerDoc).filter(Boolean);
+        const players = docs.map(parseFirestoreLeaderboardDoc).filter(Boolean);
         players.sort(function (a, b) {
             if (b.xp !== a.xp) return b.xp - a.xp;
             if (b.masteredCount !== a.masteredCount) return b.masteredCount - a.masteredCount;
-            return b.bestInfinite - a.bestInfinite;
+            return b.level - a.level;
         });
 
         container.innerHTML = "";
-
         if (players.length === 0) {
-            container.innerHTML =
-                '<div class="panel-box" style="text-align: center; padding: 20px;">' +
-                    '<div style="font-size: 34px; margin-bottom: 6px;">🏆</div>' +
-                    '<div style="font-size: 13px; font-weight: 800; color: #fff;">O Ranking está pronto para o 1º colocado!</div>' +
-                    '<div style="font-size: 11.5px; color: #cbd5e1; margin-top: 4px;">Clique em <strong>☁️ Conectar Conta</strong> acima para inaugurar o placar da turma!</div>' +
-                '</div>';
+            container.innerHTML = '<div class="panel-box" style="text-align: center; padding: 20px;"><div style="font-size: 34px; margin-bottom: 6px;">🏆</div><div style="font-size: 13px; font-weight: 800; color: #fff;">O Ranking está pronto para o 1º colocado!</div><div style="font-size: 11.5px; color: #cbd5e1; margin-top: 4px;">Clique em <strong>☁️ Conectar Conta</strong> acima para inaugurar o placar da turma!</div></div>';
             return;
         }
 
-        const myKey = normalizeUserKey(state.cloudUser);
-
+        const myAccountId = state.cloudAccountId || "";
         players.slice(0, 30).forEach(function (p, idx) {
             const pos = idx + 1;
             let medal = pos + "º";
@@ -5694,61 +5754,40 @@ window.fetchCloudLeaderboard = async function (notifyToast) {
             if (pos === 1) { medal = "🥇 1º"; topClass = " top-1"; }
             else if (pos === 2) { medal = "🥈 2º"; topClass = " top-2"; }
             else if (pos === 3) { medal = "🥉 3º"; topClass = " top-3"; }
-
-            const isMe = myKey && normalizeUserKey(p.displayName) === myKey;
+            const rankObj = getRankObj(p.level || 1);
+            const accountIdFromRow = p.displayName ? "" : "";
+            const isMe = state.cloudUser && normalizeUserKey(p.displayName) === normalizeUserKey(state.cloudUser);
             const card = document.createElement("div");
             card.className = "rank-row-card" + topClass + (isMe ? " is-me" : "");
-            card.innerHTML =
-                '<div style="display: flex; align-items: center; gap: 10px; min-width: 0;">' +
-                    '<div style="font-size: 13px; font-weight: 900; color: var(--gold-bright); min-width: 42px;">' + medal + '</div>' +
-                    '<div class="hud-avatar" style="width: 36px; height: 36px; font-size: 18px;">' + (p.avatar || "👨‍🎓") + '</div>' +
-                    '<div style="min-width: 0;">' +
-                        '<div style="font-size: 13px; font-weight: 900; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' +
-                            p.displayName + (isMe ? ' <span style="color: var(--emerald); font-size: 10px;">(Você)</span>' : '') +
-                        '</div>' +
-                        '<div style="font-size: 10.5px; color: #cbd5e1; font-weight: 700;">' +
-                            'Nvl ' + p.level + ' • ' + p.rankTitle + ' • 🏆 ' + p.clearedCount + '/9 Mundos' +
-                        '</div>' +
-                    '</div>' +
-                '</div>' +
-                '<div style="text-align: right; flex-shrink: 0;">' +
-                    '<div style="font-size: 13px; font-weight: 900; color: var(--gold-bright);">' + p.xp + ' XP</div>' +
-                    '<div style="font-size: 10px; color: var(--emerald); font-weight: 800;">📚 ' + p.masteredCount + '/90 OAB</div>' +
-                '</div>';
+            card.innerHTML = '<div style="display: flex; align-items: center; gap: 10px; min-width: 0;">' +
+                '<div style="font-size: 13px; font-weight: 900; color: var(--gold-bright); min-width: 42px;">' + medal + '</div>' +
+                '<div class="hud-avatar" style="width: 36px; height: 36px; font-size: 18px;">' + (p.avatar || "👨‍🎓") + '</div>' +
+                '<div style="min-width: 0;"><div style="font-size: 13px; font-weight: 900; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + p.displayName + (isMe ? ' <span style="color: var(--emerald); font-size: 10px;">(Você)</span>' : '') + '</div>' +
+                '<div style="font-size: 10.5px; color: #cbd5e1; font-weight: 700;">Nvl ' + p.level + ' • ' + rankObj.title + '</div></div></div>' +
+                '<div style="text-align: right; flex-shrink: 0;"><div style="font-size: 13px; font-weight: 900; color: var(--gold-bright);">' + p.xp + ' XP</div><div style="font-size: 10px; color: var(--emerald); font-weight: 800;">📚 ' + p.masteredCount + '/90 OAB</div></div>';
             container.appendChild(card);
         });
     } catch (e) {
-        container.innerHTML =
-            '<div class="panel-box" style="text-align: center; color: #fda4af; font-size: 11.5px;">' +
-                '⚠️ Não foi possível carregar o Ranking agora. Toque em <strong>🔄 Atualizar</strong>.' +
-            '</div>';
+        container.innerHTML = '<div class="panel-box" style="text-align: center; color: #fda4af; font-size: 11.5px;">⚠️ Não foi possível carregar o Ranking agora. Toque em <strong>🔄 Atualizar</strong>.</div>';
     }
 };
 
-// Sincronização automática ao abrir o jogo caso o aluno já tenha conta salva
 (async function autoSyncCloudOnBoot() {
-    if (!state.cloudUser || !state.cloudPin) return;
-    const userKey = normalizeUserKey(state.cloudUser);
-    if (!userKey) return;
+    if (!state.cloudUser || !state.cloudAccountId) return;
     try {
-        const docUrl = FIRESTORE_BASE_URL + "/players/" + encodeURIComponent(userKey) + "?key=" + FIREBASE_API_KEY;
-        const res = await fetch(docUrl, { method: "GET" });
+        const res = await fetch(getCloudDocUrl(FIREBASE_SAVE_COLLECTION, state.cloudAccountId), { method: "GET" });
         if (res.status === 200) {
-            const docJson = await res.json();
-            const existing = parseFirestorePlayerDoc(docJson);
-            if (existing && existing.pin === state.cloudPin && existing.saveCode) {
+            const existing = parseFirestoreSaveDoc(await res.json());
+            if (existing && existing.saveCode) {
                 const cloudRestored = decodeSaveCode(existing.saveCode);
                 if (cloudRestored && (cloudRestored.xp || 0) > (state.xp || 0)) {
                     cloudRestored.pcMode = state.pcMode;
                     cloudRestored.cloudUser = state.cloudUser;
-                    cloudRestored.cloudPin = state.cloudPin;
-                    if (existing.avatar && AVATARS.indexOf(existing.avatar) !== -1) {
-                        cloudRestored.avatar = existing.avatar;
-                    }
+                    cloudRestored.cloudPinHash = state.cloudPinHash;
+                    cloudRestored.cloudAccountId = state.cloudAccountId;
+                    if (existing.avatar && AVATARS.indexOf(existing.avatar) !== -1) cloudRestored.avatar = existing.avatar;
                     state = cloudRestored;
-                    refreshHUD();
-                    refreshStartScreenUI();
-                    renderWorldsView();
+                    refreshHUD(); refreshStartScreenUI(); renderWorldsView();
                 }
             }
         }
